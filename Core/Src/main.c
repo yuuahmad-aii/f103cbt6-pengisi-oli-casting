@@ -52,8 +52,8 @@ typedef struct
 	uint32_t raw_distance_value; // Nilai mentah dari H, M, L (maksimal 24-bit, gunakan uint32_t)
 	float distance_mm;			 // Hasil jarak dalam mm
 	uint8_t new_data_available;	 // Flag penanda data baru
-	// GPIO_TypeDef *de_port;       // Port GPIO untuk pin DE
-	// uint16_t de_pin;             // Pin GPIO untuk pin DE
+								 // GPIO_TypeDef *de_port;       // Port GPIO untuk pin DE
+								 // uint16_t de_pin;             // Pin GPIO untuk pin DE
 } Sensor_HandleTypeDef;
 
 // Struktur untuk state kontrol pengisian (histeresis)
@@ -531,9 +531,8 @@ int main(void)
 	Initialize_Sensors();
 
 	// Mulai menerima data dari semua sensor via interrupt
-	//	for (int i = 0; i < NUM_SENSORS; i++) {
-	//		HAL_UART_Receive_IT(sensors[i].huart, &sensors[i].rx_buffer, 1);
-	//	}
+	for (int i = 0; i < NUM_SENSORS; i++)
+		HAL_UART_Receive_IT(sensors[i].huart, &sensors[i].rx_buffer, 1);
 
 	// Beri sedikit waktu agar USB siap
 	HAL_Delay(2000);
@@ -550,7 +549,7 @@ int main(void)
 		{
 			Request_Sensor_Data(&sensors[i]);
 			// Pastikan interrupt receive aktif untuk sensor ini agar bisa menerima respons
-			HAL_UART_Receive_IT(sensors[i].huart, &sensors[i].rx_buffer, 1);
+			// HAL_UART_Receive_IT(sensors[i].huart, &sensors[i].rx_buffer, 1); sudah ada sebelum while loop
 			HAL_Delay(50); // Beri sedikit waktu agar sensor merespons dan data masuk
 		}
 
