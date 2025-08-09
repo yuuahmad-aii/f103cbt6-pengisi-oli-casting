@@ -59,8 +59,12 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define USER_BTN_Pin GPIO_PIN_0
 #define USER_BTN_GPIO_Port GPIOA
-#define SPI1_CS_Pin GPIO_PIN_0
-#define SPI1_CS_GPIO_Port GPIOB
+#define SPI1_CS_Pin GPIO_PIN_4
+#define SPI1_CS_GPIO_Port GPIOA
+#define POMPA_1_ON_Pin GPIO_PIN_0
+#define POMPA_1_ON_GPIO_Port GPIOB
+#define POMPA_2_ON_Pin GPIO_PIN_1
+#define POMPA_2_ON_GPIO_Port GPIOB
 #define USER_LED_Pin GPIO_PIN_2
 #define USER_LED_GPIO_Port GPIOB
 #define LED_GREEN_Pin GPIO_PIN_12

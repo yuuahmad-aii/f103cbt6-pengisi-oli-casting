@@ -39,7 +39,9 @@
 typedef enum
 {
   STATE_IDLE,
-  STATE_FILLING
+  STATE_FILLING,
+  STATE_FILLING_B, // isi drum B
+  STATE_FILLING_C  // isi drum C
 } FillState;
 
 // Struktur untuk menyimpan semua parameter yang dapat dikonfigurasi
@@ -67,7 +69,8 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define MAX_MOVING_AVG_SIZE 20 // Ukuran maksimum buffer
+#define SAMPLE_SIZE 8          // Define the size of the first-stage sampling
+#define MAX_MOVING_AVG_SIZE 10 // Ukuran maksimum buffer
 
 #define GUNAKAN_LCD 1     // Aktifkan jika menggunakan LCD I2C
 #define GUNAKAN_SD_CARD 0 // Aktifkan jika menggunakan SD Card
@@ -111,6 +114,24 @@ TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
+// Variables for the new two-stage filter
+float sample_buffer1[SAMPLE_SIZE];
+float sample_buffer2[SAMPLE_SIZE];
+float sample_buffer3[SAMPLE_SIZE];
+uint8_t sample_counter = 0;
+
+// New buffers for the two-stage filter
+float Stage2_buffer1[MAX_MOVING_AVG_SIZE];
+float Stage2_buffer2[MAX_MOVING_AVG_SIZE];
+float Stage2_buffer3[MAX_MOVING_AVG_SIZE];
+
+uint8_t stage2_index1 = 0;
+uint8_t stage2_index2 = 0;
+uint8_t stage2_index3 = 0;
+
+uint8_t is_stage2_full1 = 0;
+uint8_t is_stage2_full2 = 0;
+uint8_t is_stage2_full3 = 0;
 
 // variabel moving average
 float Distance1_buffer[MAX_MOVING_AVG_SIZE];
@@ -134,8 +155,8 @@ char lcd_buffer[20];
 float LevelA_persen = 0, LevelB_persen = 0, LevelC_persen = 0;
 
 // Variabel state untuk kontrol histeresis
-FillState state_A = STATE_IDLE;
-FillState state_B = STATE_IDLE;
+FillState state_pompa_A = STATE_IDLE;
+FillState state_pompa_B = STATE_IDLE;
 
 // Variabel global untuk menyimpan parameter
 ControlParams g_params;
@@ -155,7 +176,7 @@ char TEXT_L2[16] = {0};
 
 // Timers for non-blocking loops
 uint32_t last_trig_time = 0;
-uint32_t trig_time = 20;
+uint32_t trig_time = 25;
 uint8_t counter_trig = 0;
 
 /* USER CODE END PV */
@@ -181,6 +202,8 @@ void Save_Parameters_To_Flash(void);
 void Load_Parameters_From_Flash(void);
 void Set_Default_Parameters(void);
 float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full);
+float calculate_weighted_moving_average(float *buffer, uint8_t size, uint8_t is_full);
+float find_max_in_sample(float *sample_buffer, float tinggi_drum);
 
 /* USER CODE END PFP */
 
@@ -265,17 +288,15 @@ int main(void)
     // Run HCSR04_Trigger every 100ms
     if (current_time - last_trig_time >= trig_time)
     {
-
-      if (counter_trig == 1)
-        HCSR04_Trigger(HCSR04_SENSOR1);
-      else if (counter_trig == 2)
-        HCSR04_Trigger(HCSR04_SENSOR2);
-      else if (counter_trig == 3)
-        HCSR04_Trigger(HCSR04_SENSOR3);
-      else
-        counter_trig = 0;
-
-      counter_trig++;
+      // if (counter_trig == 1)
+      HCSR04_Trigger(HCSR04_SENSOR1);
+      // else if (counter_trig == 2)
+      HCSR04_Trigger(HCSR04_SENSOR2);
+      // else if (counter_trig == 3)
+      HCSR04_Trigger(HCSR04_SENSOR3);
+      // else
+      //   counter_trig = 0;
+      // counter_trig++;
       last_trig_time = current_time;
     }
 
@@ -667,7 +688,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, SPI1_CS_Pin | USER_LED_Pin | LED_GREEN_Pin | LED_RED_Pin | POMPA_BA_Pin | POMPA_CB_Pin | TRIG_1_Pin | TRIG_2_Pin | TRIG_3_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, USER_LED_Pin | LED_GREEN_Pin | LED_RED_Pin | POMPA_BA_Pin | POMPA_CB_Pin | TRIG_1_Pin | TRIG_2_Pin | TRIG_3_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : USER_BTN_Pin */
   GPIO_InitStruct.Pin = USER_BTN_Pin;
@@ -675,10 +699,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(USER_BTN_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SPI1_CS_Pin USER_LED_Pin LED_GREEN_Pin LED_RED_Pin
-                           POMPA_BA_Pin POMPA_CB_Pin TRIG_1_Pin TRIG_2_Pin
-                           TRIG_3_Pin */
-  GPIO_InitStruct.Pin = SPI1_CS_Pin | USER_LED_Pin | LED_GREEN_Pin | LED_RED_Pin | POMPA_BA_Pin | POMPA_CB_Pin | TRIG_1_Pin | TRIG_2_Pin | TRIG_3_Pin;
+  /*Configure GPIO pin : SPI1_CS_Pin */
+  GPIO_InitStruct.Pin = SPI1_CS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(SPI1_CS_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : POMPA_1_ON_Pin POMPA_2_ON_Pin */
+  GPIO_InitStruct.Pin = POMPA_1_ON_Pin | POMPA_2_ON_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : USER_LED_Pin LED_GREEN_Pin LED_RED_Pin POMPA_BA_Pin
+                           POMPA_CB_Pin TRIG_1_Pin TRIG_2_Pin TRIG_3_Pin */
+  GPIO_InitStruct.Pin = USER_LED_Pin | LED_GREEN_Pin | LED_RED_Pin | POMPA_BA_Pin | POMPA_CB_Pin | TRIG_1_Pin | TRIG_2_Pin | TRIG_3_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -690,6 +726,26 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Function to find the maximum value from a small sample
+float find_max_in_sample(float *sample_buffer, float tinggi_drum)
+{
+  float max_val = 0.0f;
+  for (int i = 0; i < SAMPLE_SIZE; i++)
+  {
+    if (sample_buffer[i] > max_val)
+    {
+      max_val = sample_buffer[i];
+    }
+  }
+
+  if (max_val > tinggi_drum)
+  {
+    max_val = tinggi_drum; // jangan sampai nilainya melebihi max tinggi A
+  }
+
+  return max_val;
+}
+
 // kalkukasi moving average
 float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full)
 {
@@ -704,6 +760,39 @@ float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full)
     sum += buffer[i];
   }
   return sum / count;
+}
+
+float calculate_weighted_moving_average(float *buffer, uint8_t size, uint8_t is_full)
+{
+  float sum_weighted_values = 0.0f;
+  float sum_of_weights = 0.0f;
+  uint8_t count = is_full ? size : buffer_index_1;
+
+  if (count == 0)
+  {
+    return 0.0f;
+  }
+
+  for (int i = 0; i < count; i++)
+  {
+    // Simple linear weighting: use the value itself as the weight.
+    // You can adjust this to your needs. For example, add a base value
+    // to prevent zero weights.
+    float weight = buffer[i];
+
+    // Or if you want a more explicit weighting:
+    // float weight = 1.0f + (buffer[i] / 10.0f); // Example: a value of 90 has a weight of 10
+
+    sum_weighted_values += buffer[i] * weight;
+    sum_of_weights += weight;
+  }
+
+  if (sum_of_weights == 0.0f)
+  {
+    return 0.0f;
+  }
+
+  return sum_weighted_values / sum_of_weights;
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
@@ -735,17 +824,17 @@ void VCP_printf(const char *format, ...)
 void Set_Default_Parameters(void)
 {
   g_params.magic_number = FLASH_MAGIC_NUMBER;
-  g_params.tinggi_A = 100.0f;
-  g_params.ambang_bawah_A = 25.0f;
-  g_params.target_penuh_A = 95.0f;
-  g_params.tinggi_B = 150.0f;
-  g_params.ambang_bawah_B = 25.0f;
-  g_params.target_penuh_B = 95.0f;
-  g_params.tinggi_C = 120.0f;
-  g_params.ambang_bawah_C = 25.0f;
-  g_params.target_penuh_C = 95.0f;
+  g_params.tinggi_A = 85.0f;
+  g_params.ambang_bawah_A = 70.0f;
+  g_params.target_penuh_A = 74.0f;
+  g_params.tinggi_B = 85.0f;
+  g_params.ambang_bawah_B = 70.0f;
+  g_params.target_penuh_B = 74.0f;
+  g_params.tinggi_C = 85.0f;
+  g_params.ambang_bawah_C = 70.0f;
+  g_params.target_penuh_C = 74.0f;
   g_params.sumber_kosong = 1.0f;
-  g_params.moving_avg_size = 20; // Nilai default 5
+  g_params.moving_avg_size = 30; // Nilai default 5
 }
 
 /**
@@ -924,29 +1013,41 @@ void Process_Command(uint8_t *cmd_buffer)
 
 void Run_Control_Logic(void)
 {
-  // --- Proses Moving Average untuk Sensor 1 ---
-  Distance1_buffer[buffer_index_1] = Distance1;
-  buffer_index_1 = (buffer_index_1 + 1) % g_params.moving_avg_size;
-  if (buffer_index_1 == 0)
-    is_buffer_full_1 = 1;
+  // Collect 8 samples before processing
+  sample_buffer1[sample_counter] = Distance1;
+  sample_buffer2[sample_counter] = Distance2;
+  sample_buffer3[sample_counter] = Distance3;
+  sample_counter++;
 
-  filtered_distance1 = calculate_moving_average(Distance1_buffer, g_params.moving_avg_size, is_buffer_full_1);
+  // Only process the filter when 8 samples are collected
+  if (sample_counter >= SAMPLE_SIZE)
+  {
+    sample_counter = 0; // Reset the counter
 
-  // --- Proses Moving Average untuk Sensor 2 ---
-  Distance2_buffer[buffer_index_2] = Distance2;
-  buffer_index_2 = (buffer_index_2 + 1) % g_params.moving_avg_size;
-  if (buffer_index_2 == 0)
-    is_buffer_full_2 = 1;
+    // --- Stage 1: Find the maximum value from the 8 samples ---
+    float max_distance1 = find_max_in_sample(sample_buffer1, g_params.tinggi_A);
+    float max_distance2 = find_max_in_sample(sample_buffer2, g_params.tinggi_B);
+    float max_distance3 = find_max_in_sample(sample_buffer3, g_params.tinggi_C);
 
-  filtered_distance2 = calculate_moving_average(Distance2_buffer, g_params.moving_avg_size, is_buffer_full_2);
+    // --- Stage 2: Push the max value into the WMA buffer ---
+    Stage2_buffer1[stage2_index1] = max_distance1;
+    stage2_index1 = (stage2_index1 + 1) % g_params.moving_avg_size;
+    if (stage2_index1 == 0)
+      is_stage2_full1 = 1; // TODO : masalahnya ada disini tolong diperbaiki
+    filtered_distance1 = calculate_moving_average(Stage2_buffer1, g_params.moving_avg_size, is_stage2_full1);
 
-  // --- Proses Moving Average untuk Sensor 3 ---
-  Distance3_buffer[buffer_index_3] = Distance3;
-  buffer_index_3 = (buffer_index_3 + 1) % g_params.moving_avg_size;
-  if (buffer_index_3 == 0)
-    is_buffer_full_3 = 1;
+    Stage2_buffer2[stage2_index2] = max_distance2;
+    stage2_index2 = (stage2_index2 + 1) % g_params.moving_avg_size;
+    if (stage2_index2 == 0)
+      is_stage2_full2 = 1;
+    filtered_distance2 = calculate_moving_average(Stage2_buffer2, g_params.moving_avg_size, is_stage2_full2);
 
-  filtered_distance3 = calculate_moving_average(Distance3_buffer, g_params.moving_avg_size, is_buffer_full_3);
+    Stage2_buffer3[stage2_index3] = max_distance3;
+    stage2_index3 = (stage2_index3 + 1) % g_params.moving_avg_size;
+    if (stage2_index3 == 0)
+      is_stage2_full3 = 1;
+    filtered_distance3 = calculate_moving_average(Stage2_buffer3, g_params.moving_avg_size, is_stage2_full3);
+  }
 
   // Gunakan nilai jarak yang sudah difilter
   float LevelA_cm = g_params.tinggi_A - filtered_distance1;
@@ -969,58 +1070,71 @@ void Run_Control_Logic(void)
   else if (LevelC_persen > 100)
     LevelC_persen = 100;
 
-  if (state_A == STATE_IDLE && LevelA_persen <= g_params.ambang_bawah_A)
+  // --- LED merah jika salah satu drum di bawah ambang ---
+  if (LevelA_persen <= g_params.ambang_bawah_A ||
+      LevelB_persen <= g_params.ambang_bawah_B ||
+      LevelC_persen <= g_params.ambang_bawah_C)
+    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+  else
+    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
+
+  // --- Kontrol POMPA_BA (drum A) ---
+  if (state_pompa_A == STATE_IDLE)
   {
-    if (LevelB_persen > g_params.sumber_kosong)
+    if (LevelA_persen <= g_params.ambang_bawah_A &&
+        HAL_GPIO_ReadPin(POMPA_1_ON_GPIO_Port, POMPA_1_ON_Pin) == GPIO_PIN_RESET) // tombol ditekan
     {
-      state_A = STATE_FILLING;
+      state_pompa_A = STATE_FILLING;
       HAL_GPIO_WritePin(POMPA_BA_GPIO_Port, POMPA_BA_Pin, GPIO_PIN_SET);
     }
   }
-  else if (state_A == STATE_FILLING)
+  else if (state_pompa_A == STATE_FILLING)
   {
-    if (LevelA_persen >= g_params.target_penuh_A || LevelB_persen <= g_params.sumber_kosong)
+    if (LevelA_persen >= g_params.target_penuh_A)
     {
-      state_A = STATE_IDLE;
+      state_pompa_A = STATE_IDLE;
       HAL_GPIO_WritePin(POMPA_BA_GPIO_Port, POMPA_BA_Pin, GPIO_PIN_RESET);
     }
   }
 
-  if (state_A == STATE_IDLE)
+  // --- Kontrol POMPA_CB (drum B dan drum C) ---
+  if (state_pompa_B == STATE_IDLE)
   {
-    if (state_B == STATE_IDLE && LevelB_persen <= g_params.ambang_bawah_B)
+    if (LevelB_persen <= g_params.ambang_bawah_B &&
+        HAL_GPIO_ReadPin(POMPA_2_ON_GPIO_Port, POMPA_2_ON_Pin) == GPIO_PIN_RESET) // tombol ditekan
     {
-      if (LevelC_persen > g_params.sumber_kosong)
-      {
-        state_B = STATE_FILLING;
-        HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin,
-                          GPIO_PIN_SET);
-      }
+      state_pompa_B = STATE_FILLING_B;
+      HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_SET);
     }
-    else if (state_B == STATE_FILLING)
+    else if (LevelC_persen <= g_params.ambang_bawah_C &&
+             HAL_GPIO_ReadPin(POMPA_2_ON_GPIO_Port, POMPA_2_ON_Pin) == GPIO_PIN_RESET) // tombol ditekan
     {
-      if (LevelB_persen >= g_params.target_penuh_B || LevelC_persen <= g_params.sumber_kosong)
-      {
-        state_B = STATE_IDLE;
-        HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin,
-                          GPIO_PIN_RESET);
-      }
+      state_pompa_B = STATE_FILLING_C;
+      HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_SET);
     }
   }
-  else
+  else if (state_pompa_B == STATE_FILLING_B)
   {
-    state_B = STATE_IDLE;
-    HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_RESET);
+    if (LevelB_persen >= g_params.target_penuh_B)
+    {
+      state_pompa_B = STATE_IDLE;
+      HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_RESET);
+    }
+  }
+  else if (state_pompa_B == STATE_FILLING_C)
+  {
+    if (LevelC_persen >= g_params.target_penuh_C)
+    {
+      state_pompa_B = STATE_IDLE;
+      HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_RESET);
+    }
   }
 
-  if (LevelC_persen <= g_params.ambang_bawah_C)
-  {
-    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
-  }
+  // --- LED hijau jika idle, mati jika menyalakan pompa ---
+  if (state_pompa_A == STATE_IDLE && state_pompa_B == STATE_IDLE)
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
   else
-  {
-    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
-  }
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
 }
 
 void Update_LCD_Display(void)
@@ -1030,8 +1144,8 @@ void Update_LCD_Display(void)
   lcd_send_string(lcd_buffer);
   lcd_set_cursor(1, 0);
   sprintf(lcd_buffer, "C:%3.0f%% S:%c%c", LevelC_persen,
-          (state_A == STATE_FILLING) ? 'A' : ' ',
-          (state_B == STATE_FILLING) ? 'B' : ' ');
+          (state_pompa_A == STATE_FILLING) ? 'A' : ' ',
+          (state_pompa_B == STATE_FILLING) ? 'B' : ' ');
   lcd_send_string("                ");
   lcd_set_cursor(1, 0);
   lcd_send_string(lcd_buffer);
