@@ -60,11 +60,15 @@ typedef struct
   float target_penuh_C;
 
   float sumber_kosong;
+
+  uint8_t moving_avg_size; // Jumlah nilai yang akan dirata-rata
 } ControlParams;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define MAX_MOVING_AVG_SIZE 20 // Ukuran maksimum buffer
+
 #define GUNAKAN_LCD 1     // Aktifkan jika menggunakan LCD I2C
 #define GUNAKAN_SD_CARD 0 // Aktifkan jika menggunakan SD Card
 
@@ -108,6 +112,21 @@ TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 
+// variabel moving average
+float Distance1_buffer[MAX_MOVING_AVG_SIZE];
+float Distance2_buffer[MAX_MOVING_AVG_SIZE];
+float Distance3_buffer[MAX_MOVING_AVG_SIZE];
+
+float filtered_distance1, filtered_distance2, filtered_distance3;
+
+uint8_t buffer_index_1 = 0;
+uint8_t buffer_index_2 = 0;
+uint8_t buffer_index_3 = 0;
+
+uint8_t is_buffer_full_1 = 0;
+uint8_t is_buffer_full_2 = 0;
+uint8_t is_buffer_full_3 = 0;
+
 // Buffer untuk LCD (misalnya, 20 karakter)
 char lcd_buffer[20];
 
@@ -136,6 +155,7 @@ char TEXT_L2[16] = {0};
 
 // Timers for non-blocking loops
 uint32_t last_trig_time = 0;
+uint32_t trig_time = 20;
 uint8_t counter_trig = 0;
 
 /* USER CODE END PV */
@@ -160,6 +180,7 @@ void Process_Command(uint8_t *cmd_buffer);
 void Save_Parameters_To_Flash(void);
 void Load_Parameters_From_Flash(void);
 void Set_Default_Parameters(void);
+float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full);
 
 /* USER CODE END PFP */
 
@@ -242,7 +263,7 @@ int main(void)
     // --- Task-like functions execution ---
 
     // Run HCSR04_Trigger every 100ms
-    if (current_time - last_trig_time >= 200)
+    if (current_time - last_trig_time >= trig_time)
     {
 
       if (counter_trig == 1)
@@ -669,6 +690,21 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// kalkukasi moving average
+float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full)
+{
+  float sum = 0.0f;
+  uint8_t count = is_full ? size : buffer_index_1; // Gunakan jumlah data yang ada
+
+  if (count == 0)
+    return 0.0f;
+
+  for (int i = 0; i < count; i++)
+  {
+    sum += buffer[i];
+  }
+  return sum / count;
+}
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
@@ -709,6 +745,7 @@ void Set_Default_Parameters(void)
   g_params.ambang_bawah_C = 25.0f;
   g_params.target_penuh_C = 95.0f;
   g_params.sumber_kosong = 1.0f;
+  g_params.moving_avg_size = 20; // Nilai default 5
 }
 
 /**
@@ -773,6 +810,7 @@ void Process_Command(uint8_t *cmd_buffer)
 {
   char *cmd = (char *)cmd_buffer;
   float min, max;
+  uint16_t val;
 
   if (strncmp(cmd, "$$", 2) == 0)
   {
@@ -815,6 +853,7 @@ void Process_Command(uint8_t *cmd_buffer)
     len += sprintf(large_buffer + len, "$1=<min>,<max> : Set ambang batas Drum A\r\n");
     len += sprintf(large_buffer + len, "$2=<min>,<max> : Set ambang batas Drum B\r\n");
     len += sprintf(large_buffer + len, "$3=<min>,<max> : Set ambang batas Drum C\r\n");
+    len += sprintf(large_buffer + len, "$M=<num>       : Set nilai mov avrg sensor\r\n");
     len += sprintf(large_buffer + len, "$S          : Simpan parameter ke Flash\r\n");
     len += sprintf(large_buffer + len, "$L          : Muat parameter dari Flash\r\n");
     len += sprintf(large_buffer + len, "$D          : Kembalikan ke pengaturan default\r\n");
@@ -838,6 +877,28 @@ void Process_Command(uint8_t *cmd_buffer)
     g_params.ambang_bawah_C = min;
     g_params.target_penuh_C = max;
     VCP_printf("OK: Parameter Drum C diubah -> Min=%.1f, Max=%.1f\r\n", min, max);
+  }
+  else if (sscanf(cmd, "$M=%hd", &val) == 1)
+  {
+    if (val > 0 && val <= MAX_MOVING_AVG_SIZE)
+    {
+      g_params.moving_avg_size = (uint8_t)val;
+      VCP_printf("OK: Ukuran Moving Average diubah -> %d\r\n", val);
+      // Reset buffers setelah mengubah ukuran
+      memset(Distance1_buffer, 0, sizeof(Distance1_buffer));
+      memset(Distance2_buffer, 0, sizeof(Distance2_buffer));
+      memset(Distance3_buffer, 0, sizeof(Distance3_buffer));
+      buffer_index_1 = 0;
+      buffer_index_2 = 0;
+      buffer_index_3 = 0;
+      is_buffer_full_1 = 0;
+      is_buffer_full_2 = 0;
+      is_buffer_full_3 = 0;
+    }
+    else
+    {
+      VCP_printf("Error: Ukuran Moving Average tidak valid (1-%d).\r\n", MAX_MOVING_AVG_SIZE);
+    }
   }
   else if (strncmp(cmd, "$S", 2) == 0)
   {
@@ -863,9 +924,35 @@ void Process_Command(uint8_t *cmd_buffer)
 
 void Run_Control_Logic(void)
 {
-  float LevelA_cm = g_params.tinggi_A - (Distance1);
-  float LevelB_cm = g_params.tinggi_B - (Distance2);
-  float LevelC_cm = g_params.tinggi_C - (Distance3);
+  // --- Proses Moving Average untuk Sensor 1 ---
+  Distance1_buffer[buffer_index_1] = Distance1;
+  buffer_index_1 = (buffer_index_1 + 1) % g_params.moving_avg_size;
+  if (buffer_index_1 == 0)
+    is_buffer_full_1 = 1;
+
+  filtered_distance1 = calculate_moving_average(Distance1_buffer, g_params.moving_avg_size, is_buffer_full_1);
+
+  // --- Proses Moving Average untuk Sensor 2 ---
+  Distance2_buffer[buffer_index_2] = Distance2;
+  buffer_index_2 = (buffer_index_2 + 1) % g_params.moving_avg_size;
+  if (buffer_index_2 == 0)
+    is_buffer_full_2 = 1;
+
+  filtered_distance2 = calculate_moving_average(Distance2_buffer, g_params.moving_avg_size, is_buffer_full_2);
+
+  // --- Proses Moving Average untuk Sensor 3 ---
+  Distance3_buffer[buffer_index_3] = Distance3;
+  buffer_index_3 = (buffer_index_3 + 1) % g_params.moving_avg_size;
+  if (buffer_index_3 == 0)
+    is_buffer_full_3 = 1;
+
+  filtered_distance3 = calculate_moving_average(Distance3_buffer, g_params.moving_avg_size, is_buffer_full_3);
+
+  // Gunakan nilai jarak yang sudah difilter
+  float LevelA_cm = g_params.tinggi_A - filtered_distance1;
+  float LevelB_cm = g_params.tinggi_B - filtered_distance2;
+  float LevelC_cm = g_params.tinggi_C - filtered_distance3;
+
   LevelA_persen = (LevelA_cm / g_params.tinggi_A) * 100.0f;
   LevelB_persen = (LevelB_cm / g_params.tinggi_B) * 100.0f;
   LevelC_persen = (LevelC_cm / g_params.tinggi_C) * 100.0f;
