@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "*.cps": "javascript",
-        "fatfs.h": "c"
+        "fatfs.h": "c",
+        "stdlib.h": "c",
+        "hcsr04_cfg.h": "c"
     }
 }
