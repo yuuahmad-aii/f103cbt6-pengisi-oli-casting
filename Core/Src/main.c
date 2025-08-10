@@ -69,7 +69,7 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define SAMPLE_SIZE 6          // Define the size of the first-stage sampling
+#define SAMPLE_SIZE 6         // Define the size of the first-stage sampling
 #define MAX_MOVING_AVG_SIZE 6 // Ukuran maksimum buffer
 
 #define GUNAKAN_LCD 1     // Aktifkan jika menggunakan LCD I2C
@@ -1162,15 +1162,37 @@ void Run_Control_Logic(void)
 void Update_LCD_Display(void)
 {
   lcd_set_cursor(0, 0);
-  sprintf(lcd_buffer, "A:%3.0f%% B:%3.0f%%", LevelA_persen, LevelB_persen);
+  sprintf(lcd_buffer, "%3.0f%% %3.0f%% %3.0f%%", LevelA_persen, LevelB_persen, LevelC_persen);
   lcd_send_string(lcd_buffer);
+
   lcd_set_cursor(1, 0);
-  sprintf(lcd_buffer, "C:%3.0f%% S:%c%c", LevelC_persen,
-          (state_pompa_A == STATE_FILLING) ? 'A' : ' ',
-          (state_pompa_B == STATE_FILLING) ? 'B' : ' ');
-  lcd_send_string("                ");
+  char status[17] = {0};
+
+  if (state_pompa_A == STATE_IDLE && state_pompa_B == STATE_IDLE)
+  {
+    // Cek apakah ada drum yang habis
+    if (LevelA_persen <= g_params.ambang_bawah_A)
+      strcpy(status, "drum A habis    ");
+    else if (LevelB_persen <= g_params.ambang_bawah_B)
+      strcpy(status, "drum B habis    ");
+    else if (LevelC_persen <= g_params.ambang_bawah_C)
+      strcpy(status, "drum C habis    ");
+    else
+      strcpy(status, "idle...         ");
+  }
+  else
+  {
+    // Pompa sedang bekerja
+    if (state_pompa_A == STATE_FILLING)
+      strcpy(status, "isi drum A      ");
+    else if (state_pompa_B == STATE_FILLING_B)
+      strcpy(status, "isi drum B      ");
+    else if (state_pompa_B == STATE_FILLING_C)
+      strcpy(status, "isi drum C      ");
+  }
+
   lcd_set_cursor(1, 0);
-  lcd_send_string(lcd_buffer);
+  lcd_send_string(status);
 }
 
 /**
