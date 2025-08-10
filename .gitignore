@@ -1,4 +1,7 @@
 Release/
+Debug/Core/
+Debug/Drivers/
+Debug/FATFS/
+Debug/Middlewares/
+Debug/USB_DEVICE/
 Debug/
-Debug/CMSIS/
-Debug/STM32F1xx_HAL_Driver/
