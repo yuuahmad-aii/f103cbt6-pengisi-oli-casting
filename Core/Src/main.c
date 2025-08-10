@@ -69,8 +69,8 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define SAMPLE_SIZE 8          // Define the size of the first-stage sampling
-#define MAX_MOVING_AVG_SIZE 10 // Ukuran maksimum buffer
+#define SAMPLE_SIZE 6          // Define the size of the first-stage sampling
+#define MAX_MOVING_AVG_SIZE 6 // Ukuran maksimum buffer
 
 #define GUNAKAN_LCD 1     // Aktifkan jika menggunakan LCD I2C
 #define GUNAKAN_SD_CARD 0 // Aktifkan jika menggunakan SD Card
@@ -1013,6 +1013,10 @@ void Process_Command(uint8_t *cmd_buffer)
 
 void Run_Control_Logic(void)
 {
+  static uint8_t stage2_count1 = 0;
+  static uint8_t stage2_count2 = 0;
+  static uint8_t stage2_count3 = 0;
+
   // Collect 8 samples before processing
   sample_buffer1[sample_counter] = Distance1;
   sample_buffer2[sample_counter] = Distance2;
@@ -1032,20 +1036,38 @@ void Run_Control_Logic(void)
     // --- Stage 2: Push the max value into the WMA buffer ---
     Stage2_buffer1[stage2_index1] = max_distance1;
     stage2_index1 = (stage2_index1 + 1) % g_params.moving_avg_size;
-    if (stage2_index1 == 0)
-      is_stage2_full1 = 1; // TODO : masalahnya ada disini tolong diperbaiki
+    if (stage2_count1 < g_params.moving_avg_size)
+    {
+      stage2_count1++;
+      if (stage2_count1 >= g_params.moving_avg_size)
+      {
+        is_stage2_full1 = 1;
+      }
+    }
     filtered_distance1 = calculate_moving_average(Stage2_buffer1, g_params.moving_avg_size, is_stage2_full1);
 
     Stage2_buffer2[stage2_index2] = max_distance2;
     stage2_index2 = (stage2_index2 + 1) % g_params.moving_avg_size;
-    if (stage2_index2 == 0)
-      is_stage2_full2 = 1;
+    if (stage2_count2 < g_params.moving_avg_size)
+    {
+      stage2_count2++;
+      if (stage2_count2 >= g_params.moving_avg_size)
+      {
+        is_stage2_full2 = 1;
+      }
+    }
     filtered_distance2 = calculate_moving_average(Stage2_buffer2, g_params.moving_avg_size, is_stage2_full2);
 
     Stage2_buffer3[stage2_index3] = max_distance3;
     stage2_index3 = (stage2_index3 + 1) % g_params.moving_avg_size;
-    if (stage2_index3 == 0)
-      is_stage2_full3 = 1;
+    if (stage2_count3 < g_params.moving_avg_size)
+    {
+      stage2_count3++;
+      if (stage2_count3 >= g_params.moving_avg_size)
+      {
+        is_stage2_full3 = 1;
+      }
+    }
     filtered_distance3 = calculate_moving_average(Stage2_buffer3, g_params.moving_avg_size, is_stage2_full3);
   }
 

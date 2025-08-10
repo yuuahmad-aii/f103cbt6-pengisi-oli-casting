@@ -17,7 +17,7 @@
 ../Core/Src/main.c:843:6:Save_Parameters_To_Flash	4
 ../Core/Src/main.c:878:6:Load_Parameters_From_Flash	2
 ../Core/Src/main.c:898:6:Process_Command	13
-../Core/Src/main.c:1014:6:Run_Control_Logic	30
-../Core/Src/main.c:1140:6:Update_LCD_Display	3
-../Core/Src/main.c:1157:6:CDC_On_Receive	6
-../Core/Src/main.c:1194:6:Error_Handler	1
+../Core/Src/main.c:1014:6:Run_Control_Logic	33
+../Core/Src/main.c:1162:6:Update_LCD_Display	3
+../Core/Src/main.c:1179:6:CDC_On_Receive	6
+../Core/Src/main.c:1216:6:Error_Handler	1
