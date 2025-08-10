@@ -1,4 +1,4 @@
 Release/
-release/
 Debug/
-debug/
+Debug/CMSIS/
+Debug/STM32F1xx_HAL_Driver/
