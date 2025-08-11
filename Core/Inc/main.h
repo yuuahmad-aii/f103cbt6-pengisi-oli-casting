@@ -75,6 +75,8 @@ void Error_Handler(void);
 #define POMPA_BA_GPIO_Port GPIOB
 #define POMPA_CB_Pin GPIO_PIN_15
 #define POMPA_CB_GPIO_Port GPIOB
+#define BUZZER_Pin GPIO_PIN_8
+#define BUZZER_GPIO_Port GPIOA
 #define TRIG_1_Pin GPIO_PIN_3
 #define TRIG_1_GPIO_Port GPIOB
 #define TRIG_2_Pin GPIO_PIN_5

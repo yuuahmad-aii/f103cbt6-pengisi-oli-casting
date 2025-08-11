@@ -69,8 +69,10 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define SAMPLE_SIZE 6         // Define the size of the first-stage sampling
-#define MAX_MOVING_AVG_SIZE 6 // Ukuran maksimum buffer
+#define JENIS_ALARM 1         // 1 nyalakan alarm ketika penuh atau kosong, 2 nyalakan alarm dari kosong sampai penuh, 3 alarm kosong saja
+#define AUTO_CUT_OFF 0        // 1 tambah fitur auto cutoff, 0 full manual sensor hanya peringatan
+#define SAMPLE_SIZE 8         // Define the size of the first-stage sampling
+#define MAX_MOVING_AVG_SIZE 5 // Ukuran maksimum buffer
 
 #define GUNAKAN_LCD 1     // Aktifkan jika menggunakan LCD I2C
 #define GUNAKAN_SD_CARD 0 // Aktifkan jika menggunakan SD Card
@@ -87,7 +89,7 @@ typedef struct
 #define TINGGI_C 85.0f // dalam cm
 
 #define AMBANG_BAWAH 25.0f // Level 25% untuk memicu pengisian
-#define TARGET_PENUH 95.0f // Target 95% untuk menghentikan pengisian
+#define TARGET_PENUH 70.0f // Target 70% untuk menghentikan pengisian
 #define SUMBER_KOSONG 1.0f // Anggap sumber kosong jika level <= 1%
 
 // Alamat di memori Flash untuk menyimpan parameter.
@@ -121,9 +123,9 @@ float sample_buffer3[SAMPLE_SIZE];
 uint8_t sample_counter = 0;
 
 // New buffers for the two-stage filter
-float Stage2_buffer1[MAX_MOVING_AVG_SIZE];
-float Stage2_buffer2[MAX_MOVING_AVG_SIZE];
-float Stage2_buffer3[MAX_MOVING_AVG_SIZE];
+int Stage2_buffer1[MAX_MOVING_AVG_SIZE];
+int Stage2_buffer2[MAX_MOVING_AVG_SIZE];
+int Stage2_buffer3[MAX_MOVING_AVG_SIZE];
 
 uint8_t stage2_index1 = 0;
 uint8_t stage2_index2 = 0;
@@ -153,6 +155,7 @@ char lcd_buffer[20];
 
 // Variabel untuk level air
 float LevelA_persen = 0, LevelB_persen = 0, LevelC_persen = 0;
+uint8_t flag_alarm_sampai_penuh = 0;
 
 // Variabel state untuk kontrol histeresis
 FillState state_pompa_A = STATE_IDLE;
@@ -204,6 +207,7 @@ void Set_Default_Parameters(void);
 float calculate_moving_average(float *buffer, uint8_t size, uint8_t is_full);
 float calculate_weighted_moving_average(float *buffer, uint8_t size, uint8_t is_full);
 float find_max_in_sample(float *sample_buffer, float tinggi_drum);
+int find_mode_in_buffer(int *buffer, uint8_t size, uint8_t is_full);
 
 /* USER CODE END PFP */
 
@@ -688,7 +692,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI1_CS_GPIO_Port, SPI1_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, SPI1_CS_Pin | BUZZER_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, USER_LED_Pin | LED_GREEN_Pin | LED_RED_Pin | POMPA_BA_Pin | POMPA_CB_Pin | TRIG_1_Pin | TRIG_2_Pin | TRIG_3_Pin, GPIO_PIN_RESET);
@@ -699,12 +703,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(USER_BTN_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI1_CS_Pin */
-  GPIO_InitStruct.Pin = SPI1_CS_Pin;
+  /*Configure GPIO pins : SPI1_CS_Pin BUZZER_Pin */
+  GPIO_InitStruct.Pin = SPI1_CS_Pin | BUZZER_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI1_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : POMPA_1_ON_Pin POMPA_2_ON_Pin */
   GPIO_InitStruct.Pin = POMPA_1_ON_Pin | POMPA_2_ON_Pin;
@@ -726,6 +730,38 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// FUNGSI BARU: Mencari nilai yang paling sering muncul (modus) dalam buffer integer
+int find_mode_in_buffer(int *buffer, uint8_t size, uint8_t is_full)
+{
+  if (size == 0 || is_full == 0) // Jika buffer kosong
+  {
+    return 0;
+  }
+
+  int mode = buffer[0];
+  int max_count = 1;
+
+  for (int i = 0; i < size; i++)
+  {
+    int current_val = buffer[i];
+    int current_count = 0;
+    for (int j = 0; j < size; j++)
+    {
+      if (buffer[j] == current_val)
+      {
+        current_count++;
+      }
+    }
+    if (current_count > max_count)
+    {
+      max_count = current_count;
+      mode = current_val;
+    }
+  }
+
+  return mode;
+}
+
 // Function to find the maximum value from a small sample
 float find_max_in_sample(float *sample_buffer, float tinggi_drum)
 {
@@ -824,17 +860,17 @@ void VCP_printf(const char *format, ...)
 void Set_Default_Parameters(void)
 {
   g_params.magic_number = FLASH_MAGIC_NUMBER;
-  g_params.tinggi_A = 85.0f;
-  g_params.ambang_bawah_A = 70.0f;
-  g_params.target_penuh_A = 74.0f;
-  g_params.tinggi_B = 85.0f;
-  g_params.ambang_bawah_B = 70.0f;
-  g_params.target_penuh_B = 74.0f;
-  g_params.tinggi_C = 85.0f;
-  g_params.ambang_bawah_C = 70.0f;
-  g_params.target_penuh_C = 74.0f;
-  g_params.sumber_kosong = 1.0f;
-  g_params.moving_avg_size = 30; // Nilai default 5
+  g_params.tinggi_A = TINGGI_A;
+  g_params.ambang_bawah_A = AMBANG_BAWAH;
+  g_params.target_penuh_A = TARGET_PENUH;
+  g_params.tinggi_B = TINGGI_B;
+  g_params.ambang_bawah_B = AMBANG_BAWAH;
+  g_params.target_penuh_B = TARGET_PENUH;
+  g_params.tinggi_C = TINGGI_C;
+  g_params.ambang_bawah_C = AMBANG_BAWAH;
+  g_params.target_penuh_C = TARGET_PENUH;
+  g_params.sumber_kosong = SUMBER_KOSONG;
+  g_params.moving_avg_size = MAX_MOVING_AVG_SIZE; // Nilai default 5
 }
 
 /**
@@ -1010,12 +1046,17 @@ void Process_Command(uint8_t *cmd_buffer)
         "Error: Perintah tidak dikenali. Ketik '$H' untuk bantuan.\r\n");
   }
 }
-
 void Run_Control_Logic(void)
 {
   static uint8_t stage2_count1 = 0;
   static uint8_t stage2_count2 = 0;
   static uint8_t stage2_count3 = 0;
+
+  // Variables for the new timed alarm logic
+  static uint32_t red_alarm_start_time = 0;
+  static uint8_t is_red_alarm_active = 0;
+  static uint32_t green_alarm_start_time = 0;
+  static uint8_t is_green_alarm_active = 0;
 
   // Collect 8 samples before processing
   sample_buffer1[sample_counter] = Distance1;
@@ -1034,41 +1075,56 @@ void Run_Control_Logic(void)
     float max_distance3 = find_max_in_sample(sample_buffer3, g_params.tinggi_C);
 
     // --- Stage 2: Push the max value into the WMA buffer ---
-    Stage2_buffer1[stage2_index1] = max_distance1;
-    stage2_index1 = (stage2_index1 + 1) % g_params.moving_avg_size;
-    if (stage2_count1 < g_params.moving_avg_size)
+    // Check if the value is not an "error" value (equal to TINGGI_A)
+    // If it's an error, don't add it to the buffer and keep the previous value.
+    if (max_distance1 != g_params.tinggi_A)
     {
-      stage2_count1++;
-      if (stage2_count1 >= g_params.moving_avg_size)
+      Stage2_buffer1[stage2_index1] = max_distance1;
+      stage2_index1 = (stage2_index1 + 1) % g_params.moving_avg_size;
+      if (stage2_count1 < g_params.moving_avg_size)
       {
-        is_stage2_full1 = 1;
+        stage2_count1++;
+        if (stage2_count1 >= g_params.moving_avg_size)
+        {
+          is_stage2_full1 = 1;
+        }
       }
     }
-    filtered_distance1 = calculate_moving_average(Stage2_buffer1, g_params.moving_avg_size, is_stage2_full1);
+    // else, the buffer and index are not updated, effectively skipping the invalid sample.
+    // filtered_distance1 = calculate_moving_average(Stage2_buffer1, g_params.moving_avg_size, is_stage2_full1);
+    filtered_distance1 = (float)find_mode_in_buffer(Stage2_buffer1, g_params.moving_avg_size, is_stage2_full1);
 
-    Stage2_buffer2[stage2_index2] = max_distance2;
-    stage2_index2 = (stage2_index2 + 1) % g_params.moving_avg_size;
-    if (stage2_count2 < g_params.moving_avg_size)
+    if (max_distance2 != g_params.tinggi_B)
     {
-      stage2_count2++;
-      if (stage2_count2 >= g_params.moving_avg_size)
+      Stage2_buffer2[stage2_index2] = max_distance2;
+      stage2_index2 = (stage2_index2 + 1) % g_params.moving_avg_size;
+      if (stage2_count2 < g_params.moving_avg_size)
       {
-        is_stage2_full2 = 1;
+        stage2_count2++;
+        if (stage2_count2 >= g_params.moving_avg_size)
+        {
+          is_stage2_full2 = 1;
+        }
       }
     }
-    filtered_distance2 = calculate_moving_average(Stage2_buffer2, g_params.moving_avg_size, is_stage2_full2);
+    // filtered_distance2 = calculate_moving_average(Stage2_buffer2, g_params.moving_avg_size, is_stage2_full2);
+    filtered_distance2 = (float)find_mode_in_buffer(Stage2_buffer2, g_params.moving_avg_size, is_stage2_full2);
 
-    Stage2_buffer3[stage2_index3] = max_distance3;
-    stage2_index3 = (stage2_index3 + 1) % g_params.moving_avg_size;
-    if (stage2_count3 < g_params.moving_avg_size)
+    if (max_distance3 != g_params.tinggi_C)
     {
-      stage2_count3++;
-      if (stage2_count3 >= g_params.moving_avg_size)
+      Stage2_buffer3[stage2_index3] = max_distance3;
+      stage2_index3 = (stage2_index3 + 1) % g_params.moving_avg_size;
+      if (stage2_count3 < g_params.moving_avg_size)
       {
-        is_stage2_full3 = 1;
+        stage2_count3++;
+        if (stage2_count3 >= g_params.moving_avg_size)
+        {
+          is_stage2_full3 = 1;
+        }
       }
     }
-    filtered_distance3 = calculate_moving_average(Stage2_buffer3, g_params.moving_avg_size, is_stage2_full3);
+    // filtered_distance3 = calculate_moving_average(Stage2_buffer3, g_params.moving_avg_size, is_stage2_full3);
+    filtered_distance3 = (float)find_mode_in_buffer(Stage2_buffer3, g_params.moving_avg_size, is_stage2_full3);
   }
 
   // Gunakan nilai jarak yang sudah difilter
@@ -1092,6 +1148,73 @@ void Run_Control_Logic(void)
   else if (LevelC_persen > 100)
     LevelC_persen = 100;
 
+#if JENIS_ALARM == 1
+//  // --- Start the red alarm for 8 seconds when a drum reaches the low threshold ---
+//  if ((LevelA_persen <= g_params.ambang_bawah_A ||
+//       LevelB_persen <= g_params.ambang_bawah_B ||
+//       LevelC_persen <= g_params.ambang_bawah_C) &&
+//      is_red_alarm_active == 0)
+//  {
+//    is_red_alarm_active = 1;
+//    red_alarm_start_time = HAL_GetTick();
+//    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+//  }
+//
+//  // --- Start the green alarm for 8 seconds when a drum reaches the high threshold ---
+//  if ((LevelA_persen >= g_params.target_penuh_A ||
+//       LevelB_persen >= g_params.target_penuh_B ||
+//       LevelC_persen >= g_params.target_penuh_C) &&
+//      is_green_alarm_active == 0)
+//  {
+//    is_green_alarm_active = 1;
+//    green_alarm_start_time = HAL_GetTick();
+//    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+//  }
+//
+//  // --- Turn off the red alarm after 8 seconds ---
+//  if (is_red_alarm_active && (HAL_GetTick() - red_alarm_start_time >= 8000))
+//  {
+//    is_red_alarm_active = 0;
+//    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
+//  }
+//
+//  // --- Turn off the green alarm after 8 seconds ---
+//  if (is_green_alarm_active && (HAL_GetTick() - green_alarm_start_time >= 8000))
+//  {
+//    is_green_alarm_active = 0;
+//    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+//  }
+//
+//  // --- Buzzer control logic (off if both alarms are inactive) ---
+//  if (is_red_alarm_active == 0 && is_green_alarm_active == 0)
+//  {
+//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+//  }
+#elif JENIS_ALARM == 2
+  // --- LED merah jika salah satu drum di bawah ambang ---
+  if (LevelA_persen <= g_params.ambang_bawah_A ||
+      LevelB_persen <= g_params.ambang_bawah_B ||
+      LevelC_persen <= g_params.ambang_bawah_C)
+    flag_alarm_sampai_penuh = 1;
+
+  if ((LevelA_persen >= g_params.target_penuh_A ||
+       LevelB_persen >= g_params.target_penuh_B ||
+       LevelC_persen >= g_params.target_penuh_C) &&
+      flag_alarm_sampai_penuh == 1)
+  {
+    flag_alarm_sampai_penuh = 0;
+  }
+
+  flag_alarm_sampai_penuh == 1 ? HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET) : HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
+
+  // --- LED hijau akan menyala jika semua drum tidak kosong ---
+  if (LevelA_persen >= g_params.ambang_bawah_A && LevelB_persen >= g_params.ambang_bawah_B && LevelC_persen >= g_params.ambang_bawah_C)
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+  else
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+#elif JENIS_ALARM == 3
   // --- LED merah jika salah satu drum di bawah ambang ---
   if (LevelA_persen <= g_params.ambang_bawah_A ||
       LevelB_persen <= g_params.ambang_bawah_B ||
@@ -1100,6 +1223,14 @@ void Run_Control_Logic(void)
   else
     HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
 
+  // --- LED hijau akan menyala jika semua drum tidak kosong ---
+  if (LevelA_persen >= g_params.ambang_bawah_A && LevelB_persen >= g_params.ambang_bawah_B && LevelC_persen >= g_params.ambang_bawah_C)
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+  else
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+#endif
+
+#if AUTO_CUT_OFF == 1
   // --- Kontrol POMPA_BA (drum A) ---
   if (state_pompa_A == STATE_IDLE)
   {
@@ -1151,12 +1282,7 @@ void Run_Control_Logic(void)
       HAL_GPIO_WritePin(POMPA_CB_GPIO_Port, POMPA_CB_Pin, GPIO_PIN_RESET);
     }
   }
-
-  // --- LED hijau jika idle, mati jika menyalakan pompa ---
-  if (state_pompa_A == STATE_IDLE && state_pompa_B == STATE_IDLE)
-    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-  else
-    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+#endif
 }
 
 void Update_LCD_Display(void)
