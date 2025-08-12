@@ -151,10 +151,20 @@ uint8_t is_buffer_full_2 = 0;
 uint8_t is_buffer_full_3 = 0;
 
 // Buffer untuk LCD (misalnya, 20 karakter)
-char lcd_buffer[20];
+char lcd_buffer1[20];
+char lcd_buffer2[20];
 
 // Variabel untuk level air
 float LevelA_persen = 0, LevelB_persen = 0, LevelC_persen = 0;
+
+// State sebelumnya per drum
+static uint8_t was_full_A = 0, was_full_B = 0, was_full_C = 0;
+static uint8_t was_empty_A = 0, was_empty_B = 0, was_empty_C = 0;
+uint8_t is_full_A = 0, is_full_B = 0, is_full_C = 0;
+uint8_t is_empty_A = 0, is_empty_B = 0, is_empty_C = 0;
+// Timer buzzer
+static uint32_t buzzer_start_time = 0;
+static uint8_t buzzer_active = 0;
 uint8_t flag_alarm_sampai_penuh = 0;
 
 // Variabel state untuk kontrol histeresis
@@ -260,8 +270,8 @@ int main(void)
 
   // pesan awal di LCD
   lcd_set_cursor(0, 0);
-  sprintf(lcd_buffer, "hai dunia");
-  lcd_send_string(lcd_buffer);
+  sprintf(lcd_buffer1, "hai dunia");
+  lcd_send_string(lcd_buffer1);
 #endif
 
   // inisialisasi sensor ultrasonik
@@ -292,15 +302,9 @@ int main(void)
     // Run HCSR04_Trigger every 100ms
     if (current_time - last_trig_time >= trig_time)
     {
-      // if (counter_trig == 1)
       HCSR04_Trigger(HCSR04_SENSOR1);
-      // else if (counter_trig == 2)
       HCSR04_Trigger(HCSR04_SENSOR2);
-      // else if (counter_trig == 3)
       HCSR04_Trigger(HCSR04_SENSOR3);
-      // else
-      //   counter_trig = 0;
-      // counter_trig++;
       last_trig_time = current_time;
     }
 
@@ -1052,12 +1056,6 @@ void Run_Control_Logic(void)
   static uint8_t stage2_count2 = 0;
   static uint8_t stage2_count3 = 0;
 
-  // Variables for the new timed alarm logic
-  static uint32_t red_alarm_start_time = 0;
-  static uint8_t is_red_alarm_active = 0;
-  static uint32_t green_alarm_start_time = 0;
-  static uint8_t is_green_alarm_active = 0;
-
   // Collect 8 samples before processing
   sample_buffer1[sample_counter] = Distance1;
   sample_buffer2[sample_counter] = Distance2;
@@ -1149,49 +1147,62 @@ void Run_Control_Logic(void)
     LevelC_persen = 100;
 
 #if JENIS_ALARM == 1
-//  // --- Start the red alarm for 8 seconds when a drum reaches the low threshold ---
-//  if ((LevelA_persen <= g_params.ambang_bawah_A ||
-//       LevelB_persen <= g_params.ambang_bawah_B ||
-//       LevelC_persen <= g_params.ambang_bawah_C) &&
-//      is_red_alarm_active == 0)
-//  {
-//    is_red_alarm_active = 1;
-//    red_alarm_start_time = HAL_GetTick();
-//    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
-//  }
-//
-//  // --- Start the green alarm for 8 seconds when a drum reaches the high threshold ---
-//  if ((LevelA_persen >= g_params.target_penuh_A ||
-//       LevelB_persen >= g_params.target_penuh_B ||
-//       LevelC_persen >= g_params.target_penuh_C) &&
-//      is_green_alarm_active == 0)
-//  {
-//    is_green_alarm_active = 1;
-//    green_alarm_start_time = HAL_GetTick();
-//    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
-//  }
-//
-//  // --- Turn off the red alarm after 8 seconds ---
-//  if (is_red_alarm_active && (HAL_GetTick() - red_alarm_start_time >= 8000))
-//  {
-//    is_red_alarm_active = 0;
-//    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
-//  }
-//
-//  // --- Turn off the green alarm after 8 seconds ---
-//  if (is_green_alarm_active && (HAL_GetTick() - green_alarm_start_time >= 8000))
-//  {
-//    is_green_alarm_active = 0;
-//    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
-//  }
-//
-//  // --- Buzzer control logic (off if both alarms are inactive) ---
-//  if (is_red_alarm_active == 0 && is_green_alarm_active == 0)
-//  {
-//    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
-//  }
+  // Status sekarang per drum
+  is_full_A = (LevelA_persen >= g_params.target_penuh_A);
+  is_full_B = (LevelB_persen >= g_params.target_penuh_B);
+  is_full_C = (LevelC_persen >= g_params.target_penuh_C);
+
+  is_empty_A = (LevelA_persen <= g_params.ambang_bawah_A);
+  is_empty_B = (LevelB_persen <= g_params.ambang_bawah_B);
+  is_empty_C = (LevelC_persen <= g_params.ambang_bawah_C);
+
+  // === Deteksi perubahan PENUH per drum ===
+  if ((is_full_A && !was_full_A) ||
+      (is_full_B && !was_full_B) ||
+      (is_full_C && !was_full_C))
+  {
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+    buzzer_active = 1;
+    buzzer_start_time = HAL_GetTick();
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+  }
+
+  // === Deteksi perubahan KOSONG per drum ===
+  if ((is_empty_A && !was_empty_A) ||
+      (is_empty_B && !was_empty_B) ||
+      (is_empty_C && !was_empty_C))
+  {
+    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_SET);
+    buzzer_active = 1;
+    buzzer_start_time = HAL_GetTick();
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+  }
+
+  // === LED mati jika tidak ada drum penuh/kosong ===
+  if (!(is_full_A || is_full_B || is_full_C))
+  {
+    HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+  }
+  if (!(is_empty_A || is_empty_B || is_empty_C))
+  {
+    HAL_GPIO_WritePin(LED_RED_GPIO_Port, LED_RED_Pin, GPIO_PIN_RESET);
+  }
+
+  // === Timer buzzer ===
+  if (buzzer_active && (HAL_GetTick() - buzzer_start_time >= 8000))
+  {
+    buzzer_active = 0;
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+  }
+
+  // Update state sebelumnya
+  was_full_A = is_full_A;
+  was_full_B = is_full_B;
+  was_full_C = is_full_C;
+
+  was_empty_A = is_empty_A;
+  was_empty_B = is_empty_B;
+  was_empty_C = is_empty_C;
 #elif JENIS_ALARM == 2
   // --- LED merah jika salah satu drum di bawah ambang ---
   if (LevelA_persen <= g_params.ambang_bawah_A ||
@@ -1287,13 +1298,13 @@ void Run_Control_Logic(void)
 
 void Update_LCD_Display(void)
 {
+#if AUTO_CUT_OFF == 1
   lcd_set_cursor(0, 0);
-  sprintf(lcd_buffer, "%3.0f%% %3.0f%% %3.0f%%", LevelA_persen, LevelB_persen, LevelC_persen);
-  lcd_send_string(lcd_buffer);
+  sprintf(lcd_buffer1, "%3.0f%% %3.0f%% %3.0f%%", LevelA_persen, LevelB_persen, LevelC_persen);
+  lcd_send_string(lcd_buffer1);
 
   lcd_set_cursor(1, 0);
   char status[17] = {0};
-
   if (state_pompa_A == STATE_IDLE && state_pompa_B == STATE_IDLE)
   {
     // Cek apakah ada drum yang habis
@@ -1319,6 +1330,44 @@ void Update_LCD_Display(void)
 
   lcd_set_cursor(1, 0);
   lcd_send_string(status);
+#elif AUTO_CUT_OFF == 0
+  // Baris 1: Persentase level
+  sprintf(lcd_buffer1, "%3.0f%% %3.0f%% %3.0f%%", LevelA_persen, LevelB_persen, LevelC_persen);
+  lcd_set_cursor(0, 0);
+  lcd_send_string(lcd_buffer1);
+
+  // Baris 2: Status ringkas semua drum
+  char statusA[5], statusB[5], statusC[5];
+  //  char lcd_buffer2[17]={0};
+
+  // Tentukan status drum A
+  if (LevelA_persen >= g_params.target_penuh_A)
+    strcpy(statusA, "APnh");
+  else if (LevelA_persen <= g_params.ambang_bawah_A)
+    strcpy(statusA, "AKsg");
+  else
+    strcpy(statusA, "AIdl");
+
+  // Tentukan status drum B
+  if (LevelB_persen >= g_params.target_penuh_B)
+    strcpy(statusB, "BPnh");
+  else if (LevelB_persen <= g_params.ambang_bawah_B)
+    strcpy(statusB, "BKsg");
+  else
+    strcpy(statusB, "BIdl");
+
+  // Tentukan status drum C
+  if (LevelC_persen >= g_params.target_penuh_C)
+    strcpy(statusC, "CPnh");
+  else if (LevelC_persen <= g_params.ambang_bawah_C)
+    strcpy(statusC, "CKsg");
+  else
+    strcpy(statusC, "CIdl");
+
+  sprintf(lcd_buffer2, "%s %s %s", statusA, statusB, statusC);
+  lcd_set_cursor(1, 1);
+  lcd_send_string(lcd_buffer2);
+#endif
 }
 
 /**
